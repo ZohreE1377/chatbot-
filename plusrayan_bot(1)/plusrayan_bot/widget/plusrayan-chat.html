@@ -1,0 +1,146 @@
+<!-- چت‌بات واحد پلاس رایان — جایگزین ویجت قبلی. در WPCode به‌صورت HTML Snippet و Auto Insert روی «Site Wide Footer» بگذار. -->
+<div id="prc" class="prc" dir="rtl" lang="fa">
+  <button id="prc-fab" type="button" aria-label="باز کردن گفتگو با دستیار پلاس رایان" aria-expanded="false">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+  </button>
+  <section id="prc-box" class="prc-hidden" role="dialog" aria-label="دستیار هوشمند پلاس رایان">
+    <header><span class="prc-dot"></span><strong>دستیار هوشمند پلاس رایان</strong>
+      <button id="prc-new" type="button" title="گفتگوی جدید" aria-label="گفتگوی جدید">↻</button>
+      <button id="prc-close" type="button" aria-label="بستن">&times;</button></header>
+    <div id="prc-msgs" aria-live="polite"></div>
+    <div id="prc-chips"></div>
+    <form id="prc-form" autocomplete="off">
+      <input id="prc-in" type="text" maxlength="600" placeholder="سؤال خود را بنویسید…" aria-label="پیام شما">
+      <button type="submit" id="prc-send" aria-label="ارسال"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+    </form>
+  </section>
+</div>
+<style>
+.prc{font-family:Tahoma,Vazir,sans-serif;direction:rtl;--c:#0066ff;--l:#e2e8f0}
+.prc *{box-sizing:border-box}
+#prc-fab{position:fixed;bottom:20px;left:20px;width:56px;height:56px;border-radius:50%;background:var(--c);color:#fff;border:0;cursor:pointer;box-shadow:0 4px 15px rgba(0,102,255,.4);z-index:999999;display:flex;align-items:center;justify-content:center}
+#prc-box{position:fixed;bottom:86px;left:20px;width:360px;max-width:calc(100vw - 24px);height:520px;max-height:calc(100vh - 110px);background:#fff;border:1px solid #e1e8ed;border-radius:16px;box-shadow:0 10px 25px rgba(0,0,0,.15);z-index:999999;display:flex;flex-direction:column;overflow:hidden;transition:opacity .2s,transform .2s}
+#prc-box.prc-hidden{opacity:0;pointer-events:none;transform:translateY(16px);visibility:hidden}
+#prc-box header{background:var(--c);color:#fff;padding:12px 14px;display:flex;align-items:center;gap:8px;font-size:14px}
+#prc-box header strong{flex:1}
+#prc-box header button{background:none;border:0;color:#fff;font-size:20px;cursor:pointer;line-height:1;padding:0 4px}
+.prc-dot{width:8px;height:8px;background:#22c55e;border-radius:50%}
+#prc-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#f8fafc;font-size:13px;line-height:1.8}
+.prc-m{max-width:88%;padding:9px 13px;border-radius:12px;word-wrap:break-word;white-space:pre-wrap}
+.prc-m.user{background:var(--c);color:#fff;align-self:flex-start;border-bottom-left-radius:2px}
+.prc-m.bot{background:#fff;color:#1e293b;align-self:flex-end;border:1px solid var(--l);border-bottom-right-radius:2px}
+.prc-m.err{background:#fff1f2;border-color:#fecdd3;color:#9f1239}
+.prc-m a{color:var(--c);font-weight:700;text-decoration:underline;word-break:break-all}
+.prc-typing{opacity:.6}
+.prc-cards{align-self:stretch;display:grid;gap:8px}
+.prc-card{background:#fff;border:1px solid var(--l);border-radius:12px;padding:10px 12px}
+.prc-card b{display:block;font-size:12.5px;margin-bottom:4px}
+.prc-card ul{margin:0 0 8px;padding-inline-start:18px;color:#64748b;font-size:12px}
+.prc-row{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}
+.prc-price{font-weight:700;font-size:12.5px}
+.prc-tag{font-size:11px;border-radius:999px;padding:0 8px;background:#dcfce7;color:#166534}
+.prc-tag.o{background:#ffedd5;color:#9a3412}
+.prc-card a.go{background:var(--c);color:#fff!important;border-radius:8px;padding:3px 12px;text-decoration:none;font-size:12px}
+#prc-chips{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0;background:#fff}
+#prc-chips button{background:#eef4ff;color:var(--c);border:1px solid #cfe0ff;border-radius:999px;padding:3px 11px;font:inherit;font-size:12px;cursor:pointer}
+#prc-form{display:flex;gap:6px;padding:10px;background:#fff}
+#prc-in{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;font:inherit;font-size:13px;outline:none}
+#prc-in:focus{border-color:var(--c)}
+#prc-send{background:var(--c);color:#fff;border:0;border-radius:8px;padding:0 12px;cursor:pointer}
+#prc-send:disabled{opacity:.5;cursor:not-allowed}
+</style>
+<script>
+(function(){
+"use strict";
+var API   = window.PR_CHAT_API   || "https://YOUR-BACKEND.example.com/api/chat";   // ← آدرس بک‌اند را اینجا بگذار
+var HOSTS = window.PR_CHAT_HOSTS || ["plusrayan.ir","www.plusrayan.ir"];            // فقط به این دامنه‌ها لینک زنده می‌شود
+var CHIPS = ["لپ‌تاپ برای برنامه‌نویسی","لپ‌تاپ گیمینگ","لپ‌تاپ دانشجویی","کیف و پایه‌ی لپ‌تاپ"];
+var GREET = "سلام! 👋 من دستیار پلاس رایان هستم. برای انتخاب لپ‌تاپ، قطعات و لوازم جانبی کمکتان می‌کنم.";
+var $ = function(id){ return document.getElementById(id); };
+var box=$("prc-box"), fab=$("prc-fab"), msgs=$("prc-msgs"), inp=$("prc-in"), send=$("prc-send"), chips=$("prc-chips");
+if(!box) return;
+
+function store(k,v){ try{ if(v===undefined) return sessionStorage.getItem(k); if(v===null) sessionStorage.removeItem(k); else sessionStorage.setItem(k,v);}catch(e){} return null; }
+function newSid(){ var a=new Uint8Array(12); (window.crypto||{getRandomValues:function(x){for(var i=0;i<x.length;i++)x[i]=Math.random()*256}}).getRandomValues(a); return Array.prototype.map.call(a,function(b){return ("0"+b.toString(16)).slice(-2)}).join(""); }
+var sid = store("prc_sid") || (function(){ var s=newSid(); store("prc_sid",s); return s; })();
+var hist = []; try{ hist = JSON.parse(store("prc_hist")||"[]"); }catch(e){}
+var busy=false;
+
+function safeUrl(u){ try{ var x=new URL(u,location.href); return (x.protocol==="https:"||x.protocol==="http:") && HOSTS.indexOf(x.hostname)>-1 ? x.href : null; }catch(e){ return null; } }
+function el(tag,cls,text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
+
+// متن ساده + **بولد** + لینک؛ همه‌چیز با DOM ساخته می‌شود (بدون innerHTML)، پس کد تزریق‌شده اجرا نمی‌شود
+function inline(parent,text){
+  var re=/(\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<)]+)/g, last=0, m;
+  function link(label,url){ var h=safeUrl(url); if(!h){ parent.appendChild(document.createTextNode(label)); return; } var a=el("a",null,label); a.href=h; a.target="_blank"; a.rel="noopener noreferrer"; parent.appendChild(a); }
+  while((m=re.exec(text))){
+    if(m.index>last) parent.appendChild(document.createTextNode(text.slice(last,m.index)));
+    var t=m[0];
+    if(t.indexOf("**")===0) parent.appendChild(el("strong",null,t.slice(2,-2)));
+    else if(t.charAt(0)==="["){ var k=t.indexOf("]("); link(t.slice(1,k),t.slice(k+2,-1)); }
+    else link(t,t);
+    last=m.index+t.length;
+  }
+  if(last<text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+}
+function fa(n){ try{ return Number(n).toLocaleString("fa-IR"); }catch(e){ return String(n); } }
+function scroll(){ msgs.scrollTop=msgs.scrollHeight; }
+function addMsg(role,text,cls){ var d=el("div","prc-m "+role+(cls?" "+cls:"")); if(role==="bot") inline(d,text); else d.textContent=text; msgs.appendChild(d); scroll(); return d; }
+function addCards(list){
+  if(!list||!list.length) return;
+  var wrap=el("div","prc-cards");
+  list.forEach(function(p){
+    var c=el("div","prc-card"); c.appendChild(el("b",null,String(p.name||"")));
+    if(p.specs&&p.specs.length){ var ul=el("ul"); p.specs.slice(0,5).forEach(function(s){ ul.appendChild(el("li",null,String(s))); }); c.appendChild(ul); }
+    var row=el("div","prc-row");
+    row.appendChild(el("span","prc-price", p.price_toman? (p.price_exact?"":"از ")+fa(p.price_toman)+" تومان" : "قیمت در صفحه‌ی محصول"));
+    if(p.in_stock===true) row.appendChild(el("span","prc-tag","موجود"));
+    else if(p.in_stock===false) row.appendChild(el("span","prc-tag o","استعلام موجودی"));
+    var h=safeUrl(p.url); if(h){ var a=el("a","go","مشاهده"); a.href=h; a.target="_blank"; a.rel="noopener noreferrer"; row.appendChild(a); }
+    c.appendChild(row); wrap.appendChild(c);
+  });
+  msgs.appendChild(wrap); scroll();
+}
+function save(){ try{ store("prc_hist", JSON.stringify(hist.slice(-30))); }catch(e){} }
+function setBusy(b){ busy=b; send.disabled=b; }
+
+function restore(){
+  msgs.textContent="";
+  addMsg("bot",GREET);
+  hist.forEach(function(h){ if(h.t==="cards") addCards(h.v); else addMsg(h.r,h.v,h.e?"err":""); });
+  chips.style.display = hist.length ? "none" : "flex";
+}
+function renderChips(){ chips.textContent=""; CHIPS.forEach(function(c){ var b=el("button",null,c); b.type="button"; b.addEventListener("click",function(){ ask(c); }); chips.appendChild(b); }); }
+
+async function ask(text){
+  text=(text||"").trim(); if(!text||busy) return;
+  chips.style.display="none"; inp.value="";
+  addMsg("user",text); hist.push({r:"user",v:text});
+  setBusy(true);
+  var wait=addMsg("bot","در حال نوشتن…","prc-typing");
+  var ctl=new AbortController(), to=setTimeout(function(){ ctl.abort(); },45000);
+  try{
+    var headers={"Content-Type":"application/json"};
+    if(API.indexOf("ngrok")>-1) headers["ngrok-skip-browser-warning"]="true";
+    var res=await fetch(API,{method:"POST",headers:headers,body:JSON.stringify({message:text,session_id:sid}),signal:ctl.signal});
+    var data=await res.json().catch(function(){return {};});
+    wait.remove();
+    var reply=(data&&data.response)||"پاسخی دریافت نشد. دوباره امتحان کنید.";
+    addMsg("bot",reply,res.ok?"":"err"); hist.push({r:"bot",v:reply,e:!res.ok});
+    if(res.ok&&data.products&&data.products.length){ addCards(data.products); hist.push({t:"cards",v:data.products.slice(0,4)}); }
+  }catch(e){
+    wait.remove();
+    var m=e&&e.name==="AbortError"?"پاسخ دیر شد. لطفاً دوباره امتحان کنید.":"ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید و دوباره امتحان کنید.";
+    addMsg("bot",m,"err"); hist.push({r:"bot",v:m,e:true});
+  }finally{ clearTimeout(to); setBusy(false); save(); inp.focus(); }
+}
+
+function open(o){ box.classList.toggle("prc-hidden",!o); fab.setAttribute("aria-expanded",String(o)); if(o){ inp.focus(); scroll(); } }
+fab.addEventListener("click",function(){ open(box.classList.contains("prc-hidden")); });
+$("prc-close").addEventListener("click",function(){ open(false); fab.focus(); });
+$("prc-new").addEventListener("click",function(){ hist=[]; sid=newSid(); store("prc_sid",sid); save(); restore(); });
+box.addEventListener("keydown",function(e){ if(e.key==="Escape") open(false); });
+$("prc-form").addEventListener("submit",function(e){ e.preventDefault(); if(e.isComposing) return; ask(inp.value); });
+renderChips(); restore();
+})();
+</script>
