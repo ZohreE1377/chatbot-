@@ -15,13 +15,35 @@ PRICE_TTL = int(os.environ.get("PRICE_TTL", "300"))  # ثانیه
 
 LAPTOPS: list = []
 CATALOG = pd.DataFrame()
+TOOLS_VERSION = "v9-search"
+# زیر این قیمت (تومان) لپ‌تاپی در فروشگاه نداریم؛ اگر بودجه کمتر بود، ارزان‌ترین‌ها را معرفی می‌کنیم
+MIN_LAPTOP_PRICE = int(os.environ.get("MIN_LAPTOP_PRICE", "100000000"))
+NEW_DAYS = int(os.environ.get("NEW_DAYS", "90"))
+MARKET: dict = {}   # شناسه‌ی تنوع ← قیمت بازار (دیجی‌کالا/ترب) برای محصول‌های ناموجود
+MARKET_TTL_DAYS = int(os.environ.get("MARKET_TTL_DAYS", "45"))
 
 
 def reload():
     """دیتا را دوباره از فایل‌ها بخوان (بعد از همگام‌سازی)."""
-    global LAPTOPS, CATALOG
+    global LAPTOPS, CATALOG, MARKET
     LAPTOPS = json.loads((DATA / "laptops.json").read_text(encoding="utf-8"))
     CATALOG = pd.read_csv(DATA / "products_clean.csv").fillna("")
+    f = DATA / "market_prices.json"
+    try:
+        MARKET = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except Exception:
+        MARKET = {}
+    if "_build_rank" in globals():   # بعد از sync هم رتبه‌ی تازگی دوباره ساخته شود
+        _build_rank()
+    # قیمت‌های دستی (اولویت بالاتر): data/manual_prices.json  →  {"شناسه‌ی تنوع": قیمت به تومان, ...}
+    mf = DATA / "manual_prices.json"
+    try:
+        if mf.exists():
+            t = mf.stat().st_mtime
+            for k, v in json.loads(mf.read_text(encoding="utf-8")).items():
+                MARKET[str(k)] = {"p": int(v), "s": "manual", "u": "", "t": t}
+    except Exception:
+        pass
 
 
 reload()
@@ -122,9 +144,65 @@ def _fresh(d, info) -> bool:
     return days <= FRESH_DAYS
 
 
-def _card(name, pid, row_specs, lv, exact=False):
+def _old(m) -> bool:
+    """آخرین ویرایش محصول بیش از FRESH_DAYS روز (۶ ماه) پیش بوده؟"""
+    try:
+        return (time.time() - time.mktime(time.strptime(m[:10], "%Y-%m-%d"))) / 86400 > FRESH_DAYS
+    except Exception:
+        return False
+
+
+def _market(d):
+    """قیمت بازار تازه (دیجی‌کالا/ترب) برای این تنوع، یا None."""
+    e = MARKET.get(str(d["i"]))
+    if e and e.get("p") and (time.time() - e.get("t", 0)) / 86400 <= MARKET_TTL_DAYS:
+        return e
+    return None
+
+
+def _newness(d) -> int:
+    """امتیاز تازگی: محصول‌های ۲-۳ ماه اخیر (ترند و قیمت جدید) اولویت دارند.
+    با تاریخ ایجاد (بعد از sync)، وگرنه با شناسه‌ی محصول (شناسه‌ی بزرگ‌تر = تازه‌تر)."""
+    a = d.get("a")
+    if a:
+        try:
+            days = (time.time() - time.mktime(time.strptime(a[:10], "%Y-%m-%d"))) / 86400
+            return 20 if days <= NEW_DAYS else (8 if days <= 2 * NEW_DAYS else 0)
+        except Exception:
+            pass
+    ids = _PIDS
+    if not ids:
+        return 0
+    rank = _PID_RANK.get(d["p"], 0)   # ۰ (قدیمی‌ترین) تا ۱ (جدیدترین)
+    return 20 if rank >= 0.8 else (8 if rank >= 0.6 else 0)
+
+
+_PIDS: list = []
+_PID_RANK: dict = {}
+
+
+def _build_rank():
+    global _PIDS, _PID_RANK
+    _PIDS = sorted({d["p"] for d in LAPTOPS})
+    n = max(len(_PIDS) - 1, 1)
+    _PID_RANK = {pid: i / n for i, pid in enumerate(_PIDS)}
+
+
+def _price_reliable(d, info) -> bool:
+    """قیمت قابل اتکا: محصول موجود است (قیمت زنده)، یا ناموجود ولی در ۶ ماه اخیر ویرایش شده.
+    قیمت ناموجودِ قدیمی (یا بدون تاریخ ویرایش) ممکن است چند برابر عقب باشد و نباید در مقایسه با بودجه به کار رود."""
+    if info.get("in_stock") or _market(d):
+        return True
+    m = d.get("m")
+    return bool(m) and not _old(m)
+
+
+def _card(name, pid, row_specs, lv, exact=False, m=None, trusted=True):
     lv = lv or {}
+    if not trusted:   # ناموجودِ قدیمی بدون قیمت بازار: قیمت سایت قابل اتکا نیست، نمایش داده نمی‌شود
+        lv = {**lv, "price_toman": None}
     return {
+        "needs_inquiry": bool(lv.get("in_stock") is False or _old(m)),
         "name": name,
         "url": lv.get("url") or f"{WC_BASE}/?p={pid}",
         "price_toman": lv.get("price_toman"),
@@ -178,21 +256,50 @@ def _specs(d):
     return out
 
 
+def _norm_budget(b):
+    """«۱۲۰ تومن» در گفتار یعنی ۱۲۰ میلیون تومان. عدد کوچک‌تر از ۱۰۰٬۰۰۰ را میلیون حساب می‌کنیم
+    (لپ‌تاپ ارزان‌تر از ۱۰۰ هزار تومان وجود ندارد). عدد ۱۰۰ هزار تا ۱۰۰۰ هزار (مثل ۱۲۰٬۰۰۰ = «صد و بیست هزار»)
+    هم کوچک‌تر از هر لپ‌تاپی است و میلیونی خوانده می‌شود."""
+    try:
+        b = int(b)
+    except (TypeError, ValueError):
+        return None
+    if b <= 0:
+        return None
+    if b < 1_000_000:
+        b *= 1_000_000 if b < 100_000 else 1000
+    return b
+
+
 async def recommend_laptops(use, budget_toman=None, screen=None, light=False, brand=None, _relaxed=False, **_):
     a = {"use": use, "screen": screen, "light": light, "brand": brand}
+    budget_toman = _norm_budget(budget_toman)
+    if budget_toman and budget_toman < MIN_LAPTOP_PRICE and not _relaxed:
+        # با قیمت‌های جدید زیر این مبلغ لپ‌تاپی نداریم: صریح بگو و ارزان‌ترین‌های مناسب را نشان بده
+        r = await recommend_laptops(use, None, screen, light, brand, _relaxed=True)
+        cards = sorted(r["results"], key=lambda c: c["price_toman"] or 10**12)[:3]
+        for c in cards: c["over_budget"] = True
+        return {"note": f"زیر {MIN_LAPTOP_PRICE // 10**6} میلیون تومان در فروشگاه لپ‌تاپی نداریم. "
+                        "به کاربر صریح بگو «نداریم» و بعد ارزان‌ترین گزینه‌های مناسب (کارت‌های زیر) را معرفی کن.",
+                "results": cards}
     lv = await live([d["p"] for d in LAPTOPS])
     pmax = max([v["price_toman"] or 0 for v in lv.values()] or [0])
     scored = []
     for d in LAPTOPS:
         if not d["ok"]: continue
         info = lv.get(d["p"]) or {}
+        mk = _market(d) if info.get("in_stock") is not True else None
+        if mk:  # ناموجود: قیمت سایت قدیمی است؛ قیمت بازار جایگزین می‌شود
+            info = {**info, "price_toman": mk["p"], "_mk": mk}
         pmin = info.get("price_toman")
         if budget_toman and pmin and pmin > budget_toman:
             continue  # حتی ارزان‌ترین تنوع این محصول از بودجه بالاتر است
         if not _fresh(d, info): continue
+        if (budget_toman or _relaxed) and not _price_reliable(d, info):
+            continue  # با بودجه فقط قیمت‌های قابل اتکا را مقایسه می‌کنیم
         sc = _score(d, a, pmin, pmax)
         if sc < 0: continue
-        scored.append((sc + (12 if info.get("in_stock") else 0), d, info))
+        scored.append((sc + (12 if info.get("in_stock") else 0) - (0 if _price_reliable(d, info) else 15) + _newness(d), d, info))
     # حالت «نزدیک‌ترین به بودجه»: ارزان‌ترین گزینه‌های مناسب اول بیایند، نه قوی‌ترین‌ها
     scored.sort(key=(lambda x: ((x[2].get('price_toman') or 10**12), -x[0])) if _relaxed else (lambda x: -x[0]))
 
@@ -209,11 +316,17 @@ async def recommend_laptops(use, budget_toman=None, screen=None, light=False, br
                 price, stock, exact = v["price_toman"], v["in_stock"], True
             else:
                 price, stock, exact = info.get("price_toman"), info.get("in_stock"), False
+            mk = info.get("_mk")
+            if mk and stock is not True:   # تنوع ناموجود ← قیمت بازار
+                price, exact = mk["p"], True
+            else:
+                mk = None
             if budget_toman and price and exact and price > budget_toman:
                 continue  # این تنوع (مثلاً ۱ ترابایت) از بودجه گران‌تر است؛ تنوع دیگر همین محصول بررسی می‌شود
             seen.add(d["p"])
             results.append(_card(d["n"], d["p"], _specs(d),
-                                 {"price_toman": price, "in_stock": stock, "url": info.get("url")}, exact))
+                                 {"price_toman": price, "in_stock": stock, "url": info.get("url")}, exact, m=d.get("m"), trusted=bool(mk) or _price_reliable(d, {"in_stock": stock}))
+                           | ({"price_source": "market"} if mk else {}))
             if len(results) == 3: break
     note = ""
     if not results and budget_toman and not _relaxed:
@@ -234,6 +347,9 @@ async def recommend_laptops(use, budget_toman=None, screen=None, light=False, br
 
 
 # ------------------------------------------------------------- جست‌وجوی کاتالوگ
+_COMPOUND = {"پد", "هولدر", "کاور", "استند", "کیف", "کوله", "پدال"}
+
+
 async def search_products(query, limit=5, **_):
     toks = [t for t in norm(query).split() if len(t) > 1]
     if not toks: return {"results": []}
@@ -243,12 +359,66 @@ async def search_products(query, limit=5, **_):
     w = {t: math.log(N / (1 + hay.map(lambda h: t in h).sum())) for t in toks}
     rare = max(toks, key=lambda t: w[t])               # کم‌پیداترین کلمه‌ی پرسش (مثلاً «کیف») باید حتماً باشد
     sc = hay.map(lambda h: sum(w[t] for t in toks if t in h))
-    ok = CATALOG[hay.map(lambda h: rare in h)].assign(_c=sc).sort_values("_c", ascending=False)
-    ok = ok.drop_duplicates("parent_id").head(limit)
+    ok = CATALOG[hay.map(lambda h: rare in h)].assign(_c=sc, _n=CATALOG["name"].map(norm))
+    # «ماوس» نباید «ماوس پد» را بیاورد: اگر نام با کلمه‌ی کلیدی شروع شود و بلافاصله کلمه‌ای از محصول دیگر بیاید، کنار می‌رود
+    def other_type(n):
+        parts = n.split()
+        return bool(parts and parts[0] == rare and len(parts) > 1 and parts[1] in _COMPOUND and parts[1] not in toks)
+    ok = ok[~ok["_n"].map(other_type)]
+    # نامی که با خود کلمه‌ی کلیدی شروع می‌شود (نوع محصول) از نامی که فقط در وسطش آمده مهم‌تر است
+    ok = ok.assign(_c=ok["_c"] + ok["_n"].map(lambda n: 3 if n.split()[:1] == [rare] else 0))
+    ok = ok.sort_values("_c", ascending=False).drop_duplicates("parent_id").head(max(limit * 3, 12))
     lv = await live([int(x) for x in ok["parent_id"]])
+    # موجود بودن فقط امتیاز کوچکی می‌دهد تا ارتباط با سؤال (مثلاً «گیمینگ») مهم‌تر بماند
+    ok = ok.assign(_s=ok["_c"] + ok["parent_id"].map(lambda x: 1.0 if (lv.get(int(x)) or {}).get("in_stock") else 0.0))
+    ok = ok.sort_values("_s", ascending=False).head(limit)
     return {"results": [_card(r["parent_name"], int(r["parent_id"]),
                               [x for x in (r["category_leaf"], r["brand"]) if x], lv.get(int(r["parent_id"])))
                         for _, r in ok.iterrows()]}
+
+
+# ----------------------------------------------------- پیشنهاد لوازم جانبی مکمل (Cross-sell)
+_ACC_SLOTS = [   # (برچسب، کلمه‌ی دسته‌بندی، کلمه‌های لازم در نام، فقط برای گیمینگ؟)
+    ("کیف / کوله", "کیف لپ تاپ", ("کیف", "کوله"), False),
+    ("ماوس", "ماوس", ("ماوس",), False),
+    ("پایه‌ی خنک‌کننده", "کول پد", ("خنک", "کول"), True),
+    ("پایه / استند لپ‌تاپ", "استند لپ تاپ", ("استند", "پایه"), False),
+]
+
+
+async def suggest_accessories(screen_inch=None, gaming=False, **_):
+    """برای لپ‌تاپ انتخاب‌شده: کیف مناسب اندازه، ماوس، پایه (و برای گیمینگ کول‌پد). فقط محصول‌های موجود."""
+    try:
+        scr = float(screen_inch) if screen_inch else None
+    except (TypeError, ValueError):
+        scr = None
+    picks = []   # (برچسب، ردیف)
+    cand = {}
+    for label, cat, words, only_gaming in _ACC_SLOTS:
+        if only_gaming and not gaming:
+            continue
+        df = CATALOG[CATALOG["category_full"].str.contains(cat, regex=False)]
+        df = df[df["name"].map(lambda n: any(w in str(n) for w in words))].drop_duplicates("parent_id")
+        if scr:   # اندازه‌ی سازگار (وقتی در دیتا هست) ← ناسازگار حذف می‌شود
+            def ok(v):
+                try: return (not str(v).strip()) or float(v) + 0.05 >= scr
+                except ValueError: return True
+            df = df[df["compat_max_inch"].map(ok)]
+        if label == "ماوس":   # گیمینگ ← ماوس گیمینگ، وگرنه ماوس معمولی
+            g = df["name"].str.contains("گیمینگ|gaming", case=False, regex=True)
+            df = df[g] if gaming else df[~g]
+        cand[label] = df
+    lv = await live([int(x) for d in cand.values() for x in d["parent_id"]])
+    cards = []
+    for label, df in cand.items():
+        for _, r in df.iterrows():
+            info = lv.get(int(r["parent_id"])) or {}
+            if info.get("in_stock") is True:   # فقط موجودها؛ ناموجود را پیشنهاد نمی‌دهیم
+                c = _card(r["parent_name"], int(r["parent_id"]), [label], info)
+                c["slot"] = label
+                cards.append(c)
+                break
+    return {"note": "فقط لوازم موجود پیشنهاد شد؛ اگر برای دسته‌ای نیامده یعنی الان موجود نیست.", "results": cards[:4]}
 
 
 TOOL_SPECS = [
@@ -269,5 +439,16 @@ TOOL_SPECS = [
      "input_schema": {"type": "object", "properties": {
          "query": {"type": "string", "description": "چند کلمه‌ی کلیدی، مثل «کیف لپ تاپ ۱۵.۶» یا «ماوس بی سیم»"}},
          "required": ["query"]}},
+    {"name": "suggest_accessories",
+     "description": "لوازم جانبی مکمل (کیف مناسب اندازه، ماوس، پایه، و برای گیمینگ پایه‌ی خنک‌کننده) برای لپ‌تاپی که مشتری انتخاب کرده. "
+                    "بعد از معرفی لپ‌تاپ، وقتی مشتری لپ‌تاپی را پسندید یا خودش لوازم جانبی خواست صدایش بزن.",
+     "input_schema": {"type": "object", "properties": {
+         "screen_inch": {"type": "number", "description": "اندازه‌ی صفحه‌ی لپ‌تاپ انتخاب‌شده، مثل 15.6"},
+         "gaming": {"type": "boolean", "description": "لپ‌تاپ گیمینگ است؟"}}}},
 ]
-TOOL_FUNCS = {"recommend_laptops": recommend_laptops, "search_products": search_products}
+TOOL_FUNCS = {"recommend_laptops": recommend_laptops, "search_products": search_products,
+              "suggest_accessories": suggest_accessories}
+
+
+_build_rank()
+  # بعد از تعریف همه‌ی توابع
