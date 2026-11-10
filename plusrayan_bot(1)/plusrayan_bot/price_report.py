@@ -243,6 +243,7 @@ async def _wc_live(pids, with_vars, rows_by_parent):
 
 
 def main(argv=None, transport=None):
+
     ap = argparse.ArgumentParser(description="گزارش مقایسه‌ی قیمت با دیجی‌کالا و ترب")
     ap.add_argument("--scope", choices=["stale", "all"], default="stale", help="stale = فقط ناموجودها (پیش‌فرض)")
     ap.add_argument("--ids", default="", help="شناسه‌ی محصولات مادر، با کاما")

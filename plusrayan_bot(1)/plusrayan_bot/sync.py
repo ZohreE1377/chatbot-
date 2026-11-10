@@ -71,7 +71,8 @@ def to_export_df(products, variations_by_parent, cats):
                "در انبار؟": _stock(p.get("stock_status")),
                "دسته‌ها": ", ".join(path(c["id"]) for c in p.get("categories", [])),
                "توضیح کوتاه": p.get("short_description", ""), "توضیحات": p.get("description", ""),
-               "تاریخ ویرایش": p.get("date_modified_gmt") or p.get("date_modified")}
+               "تاریخ ویرایش": p.get("date_modified_gmt") or p.get("date_modified"),
+               "تاریخ ایجاد": p.get("date_created_gmt") or p.get("date_created")}
         attrs(row, p.get("attributes", []), single=False)
         rows.append(row)
         for v in variations_by_parent.get(p["id"], []):
@@ -81,11 +82,12 @@ def to_export_df(products, variations_by_parent, cats):
                   "منتشر شده": 1 if v.get("status", "publish") == "publish" else 0,
                   "در انبار؟": _stock(v.get("stock_status")),
                   "تاریخ ویرایش": max(filter(None, [v.get("date_modified_gmt") or v.get("date_modified"),
-                                                   p.get("date_modified_gmt") or p.get("date_modified")]), default=None)}
+                                                   p.get("date_modified_gmt") or p.get("date_modified")]), default=None),
+                  "تاریخ ایجاد": p.get("date_created_gmt") or p.get("date_created")}
             attrs(vr, v.get("attributes", []), single=True)
             rows.append(vr)
     df = pd.DataFrame(rows)
-    for c in ["مادر", "دسته‌ها", "توضیح کوتاه", "توضیحات", "تاریخ ویرایش"] + [f"{k} ویژگی {i}" for i in range(1, cp.MAX_ATTR + 1) for k in ("نام", "مقدار")]:
+    for c in ["مادر", "دسته‌ها", "توضیح کوتاه", "توضیحات", "تاریخ ویرایش", "تاریخ ایجاد"] + [f"{k} ویژگی {i}" for i in range(1, cp.MAX_ATTR + 1) for k in ("نام", "مقدار")]:
         if c not in df.columns:
             df[c] = None
     return df
@@ -115,8 +117,9 @@ def gpu_tier(gpu, gpu_type):
     return 2
 
 
-def build_laptops(res: pd.DataFrame, mod=None):
+def build_laptops(res: pd.DataFrame, mod=None, created=None):
     mod = mod or {}
+    created = created or {}
     lap = res[res["group"] == "لپ‌تاپ"]
     num = lambda v, cast=float: None if pd.isna(v) else cast(v)
     out = []
@@ -131,7 +134,8 @@ def build_laptops(res: pd.DataFrame, mod=None):
             sc=num(r.screen_inch), w=num(r.weight_kg), pn=r.panel if isinstance(r.panel, str) else "",
             rt=r.ram_type if isinstance(r.ram_type, str) else "",
             ok=0 if "RAM نامعقول" in flags else 1,
-            m=(str(mod.get(int(r.id)) or "")[:10] or None)))
+            m=(str(mod.get(int(r.id)) or "")[:10] or None),
+            a=(str(created.get(int(r.id)) or "")[:10] or None)))
     return out
 
 
@@ -159,7 +163,8 @@ async def run_sync(transport=None):
             if df.empty:
                 raise RuntimeError("ووکامرس هیچ محصول منتشرشده‌ای نداد")
             res, _ = cp.build_table(df)
-            laptops = build_laptops(res, dict(zip(df['شناسه'].astype(int), df['تاریخ ویرایش'])))
+            laptops = build_laptops(res, dict(zip(df['شناسه'].astype(int), df['تاریخ ویرایش'])),
+                                     dict(zip(df['شناسه'].astype(int), df['تاریخ ایجاد'])))
             # محافظ: اگر تعداد لپ‌تاپ‌ها ناگهان زیر نصف شد، چیزی را عوض نکن
             old = len(tools.LAPTOPS)
             if old and len(laptops) < 0.5 * old:
