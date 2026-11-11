@@ -93,9 +93,15 @@ function addCards(list){
     var c=el("div","prc-card"); c.appendChild(el("b",null,String(p.name||"")));
     if(p.specs&&p.specs.length){ var ul=el("ul"); p.specs.slice(0,5).forEach(function(s){ ul.appendChild(el("li",null,String(s))); }); c.appendChild(ul); }
     var row=el("div","prc-row");
-    row.appendChild(el("span","prc-price", p.price_toman? (p.price_exact?"":"از ")+fa(p.price_toman)+" تومان" : "قیمت در صفحه‌ی محصول"));
+    // قیمت قدیمی سایت (price_stale) یا قیمت نامطمئن (price_hidden) هرگز نمایش داده نمی‌شود؛ قیمت بازار با «حدود» می‌آید
+    var show = p.price_toman && !p.price_stale && !p.price_hidden;
+    var market = p.price_source==="market";
+    var txt = show ? ((market?"حدود ":(p.price_exact?"":"از "))+fa(p.price_toman)+" تومان")
+                   : ((p.price_hidden||p.price_stale||p.in_stock===false) ? "قیمت: استعلام" : "قیمت در صفحه‌ی محصول");
+    row.appendChild(el("span","prc-price",txt));
     if(p.in_stock===true) row.appendChild(el("span","prc-tag","موجود"));
     else if(p.in_stock===false) row.appendChild(el("span","prc-tag o","استعلام موجودی"));
+    if(show&&market) row.appendChild(el("span","prc-tag o","قیمت تقریبی بازار"));
     var h=safeUrl(p.url); if(h){ var a=el("a","go","مشاهده"); a.href=h; a.target="_blank"; a.rel="noopener noreferrer"; row.appendChild(a); }
     c.appendChild(row); wrap.appendChild(c);
   });

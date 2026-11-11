@@ -15,12 +15,16 @@ PRICE_TTL = int(os.environ.get("PRICE_TTL", "300"))  # ثانیه
 
 LAPTOPS: list = []
 CATALOG = pd.DataFrame()
-TOOLS_VERSION = "v9-search"
+TOOLS_VERSION = "v10-stale-price"
 # زیر این قیمت (تومان) لپ‌تاپی در فروشگاه نداریم؛ اگر بودجه کمتر بود، ارزان‌ترین‌ها را معرفی می‌کنیم
 MIN_LAPTOP_PRICE = int(os.environ.get("MIN_LAPTOP_PRICE", "100000000"))
 NEW_DAYS = int(os.environ.get("NEW_DAYS", "90"))
 MARKET: dict = {}   # شناسه‌ی تنوع ← قیمت بازار (دیجی‌کالا/ترب) برای محصول‌های ناموجود
 MARKET_TTL_DAYS = int(os.environ.get("MARKET_TTL_DAYS", "45"))
+# اگر قیمت سایت کمتر از این نسبت از قیمت بازار باشد، قیمت سایت «قدیمی» حساب می‌شود (حتی اگر محصول موجود باشد)
+STALE_RATIO = float(os.environ.get("STALE_RATIO", "0.6"))
+# ۱ = تاریخ ویرایش محصول را نشانه‌ی تازه بودن قیمت بدانیم (پیشنهاد نمی‌شود: هر ویرایشی تاریخ را عوض می‌کند)
+TRUST_MODIFIED_DATE = os.environ.get("TRUST_MODIFIED_DATE", "0") == "1"
 
 
 def reload():
@@ -152,12 +156,22 @@ def _old(m) -> bool:
         return False
 
 
-def _market(d):
-    """قیمت بازار تازه (دیجی‌کالا/ترب) برای این تنوع، یا None."""
-    e = MARKET.get(str(d["i"]))
+def _market_id(i):
+    """قیمت بازار (یا قیمت دستی) تازه برای یک شناسه (تنوع لپ‌تاپ یا محصول مادر لوازم جانبی)، یا None."""
+    e = MARKET.get(str(i))
     if e and e.get("p") and (time.time() - e.get("t", 0)) / 86400 <= MARKET_TTL_DAYS:
         return e
     return None
+
+
+def _market(d):
+    """قیمت بازار تازه (دیجی‌کالا/ترب) برای این تنوع، یا None."""
+    return _market_id(d["i"])
+
+
+def _site_stale(site_price, mk) -> bool:
+    """قیمت سایت به‌طور مشخص از قیمت بازار عقب است (مثلاً ۹۹ میلیون در برابر ۳۱۶ میلیون)؟"""
+    return bool(mk and site_price and site_price < STALE_RATIO * mk["p"])
 
 
 def _newness(d) -> int:
@@ -193,13 +207,18 @@ def _price_reliable(d, info) -> bool:
     قیمت ناموجودِ قدیمی (یا بدون تاریخ ویرایش) ممکن است چند برابر عقب باشد و نباید در مقایسه با بودجه به کار رود."""
     if info.get("in_stock") or _market(d):
         return True
+    if not TRUST_MODIFIED_DATE:
+        return False   # ناموجود و بدون قیمت بازار: قیمت سایت را باور نمی‌کنیم
     m = d.get("m")
     return bool(m) and not _old(m)
 
 
-def _card(name, pid, row_specs, lv, exact=False, m=None, trusted=True):
+def _card(name, pid, row_specs, lv, exact=False, m=None, trusted=True, source=None):
+    """source="market" یعنی قیمت از فایل بازار/دستی آمده، نه از سایت."""
     lv = lv or {}
-    if not trusted:   # ناموجودِ قدیمی بدون قیمت بازار: قیمت سایت قابل اتکا نیست، نمایش داده نمی‌شود
+    hidden = False
+    if not trusted:   # ناموجودِ بدون قیمت بازار: قیمت سایت قابل اتکا نیست، نمایش داده نمی‌شود
+        hidden = lv.get("price_toman") is not None
         lv = {**lv, "price_toman": None}
     return {
         "needs_inquiry": bool(lv.get("in_stock") is False or _old(m)),
@@ -208,7 +227,9 @@ def _card(name, pid, row_specs, lv, exact=False, m=None, trusted=True):
         "price_toman": lv.get("price_toman"),
         "in_stock": lv.get("in_stock"),
         "price_exact": bool(exact and lv.get("price_toman")),
-        "price_stale": lv.get("in_stock") is False,
+        "price_stale": lv.get("in_stock") is False and source != "market" and lv.get("price_toman") is not None,
+        "price_hidden": hidden,
+        "price_source": source,
         "specs": row_specs,
     }
 
@@ -288,9 +309,11 @@ async def recommend_laptops(use, budget_toman=None, screen=None, light=False, br
     for d in LAPTOPS:
         if not d["ok"]: continue
         info = lv.get(d["p"]) or {}
-        mk = _market(d) if info.get("in_stock") is not True else None
-        if mk:  # ناموجود: قیمت سایت قدیمی است؛ قیمت بازار جایگزین می‌شود
-            info = {**info, "price_toman": mk["p"], "_mk": mk}
+        mk = _market(d)
+        if mk and info.get("in_stock") is True and not _site_stale(info.get("price_toman"), mk):
+            mk = None   # موجود و قیمت سایت منطقی است: قیمت زنده‌ی سایت معتبر است
+        if mk:  # ناموجود یا قیمت سایت عقب‌مانده: قیمت بازار جایگزین می‌شود
+            info = {**info, "price_toman": mk["p"], "_mk": mk, "_site": info.get("price_toman")}
         pmin = info.get("price_toman")
         if budget_toman and pmin and pmin > budget_toman:
             continue  # حتی ارزان‌ترین تنوع این محصول از بودجه بالاتر است
@@ -317,7 +340,8 @@ async def recommend_laptops(use, budget_toman=None, screen=None, light=False, br
             else:
                 price, stock, exact = info.get("price_toman"), info.get("in_stock"), False
             mk = info.get("_mk")
-            if mk and stock is not True:   # تنوع ناموجود ← قیمت بازار
+            site_p = price if (d["i"] != d["p"] and exact) else info.get("_site", price)   # قیمت خود سایت (نه قیمت جایگزین‌شده)
+            if mk and (stock is not True or _site_stale(site_p, mk)):   # ناموجود یا قیمت سایت عقب‌مانده ← قیمت بازار
                 price, exact = mk["p"], True
             else:
                 mk = None
@@ -325,8 +349,9 @@ async def recommend_laptops(use, budget_toman=None, screen=None, light=False, br
                 continue  # این تنوع (مثلاً ۱ ترابایت) از بودجه گران‌تر است؛ تنوع دیگر همین محصول بررسی می‌شود
             seen.add(d["p"])
             results.append(_card(d["n"], d["p"], _specs(d),
-                                 {"price_toman": price, "in_stock": stock, "url": info.get("url")}, exact, m=d.get("m"), trusted=bool(mk) or _price_reliable(d, {"in_stock": stock}))
-                           | ({"price_source": "market"} if mk else {}))
+                                 {"price_toman": price, "in_stock": stock, "url": info.get("url")}, exact, m=d.get("m"),
+                                 trusted=bool(mk) or stock is True or _price_reliable(d, {"in_stock": stock}),
+                                 source="market" if mk else None))
             if len(results) == 3: break
     note = ""
     if not results and budget_toman and not _relaxed:
@@ -347,6 +372,17 @@ async def recommend_laptops(use, budget_toman=None, screen=None, light=False, br
 
 
 # ------------------------------------------------------------- جست‌وجوی کاتالوگ
+def _acc_card(name, pid, specs, info):
+    """کارت لوازم جانبی: موجود ← قیمت زنده (مگر خیلی از قیمت بازار/دستی عقب باشد)؛
+    ناموجود ← فقط اگر قیمت بازار/دستی (data/manual_prices.json با شناسه‌ی محصول) داریم، وگرنه قیمت نمایش داده نمی‌شود."""
+    info = dict(info or {})
+    mk = _market_id(pid)
+    source, trusted = None, info.get("in_stock") is True
+    if mk and (info.get("in_stock") is not True or _site_stale(info.get("price_toman"), mk)):
+        info["price_toman"], source, trusted = mk["p"], "market", True
+    return _card(name, pid, specs, info, exact=bool(source), trusted=trusted, source=source)
+
+
 _COMPOUND = {"پد", "هولدر", "کاور", "استند", "کیف", "کوله", "پدال"}
 
 
@@ -372,8 +408,8 @@ async def search_products(query, limit=5, **_):
     # موجود بودن فقط امتیاز کوچکی می‌دهد تا ارتباط با سؤال (مثلاً «گیمینگ») مهم‌تر بماند
     ok = ok.assign(_s=ok["_c"] + ok["parent_id"].map(lambda x: 1.0 if (lv.get(int(x)) or {}).get("in_stock") else 0.0))
     ok = ok.sort_values("_s", ascending=False).head(limit)
-    return {"results": [_card(r["parent_name"], int(r["parent_id"]),
-                              [x for x in (r["category_leaf"], r["brand"]) if x], lv.get(int(r["parent_id"])))
+    return {"results": [_acc_card(r["parent_name"], int(r["parent_id"]),
+                                  [x for x in (r["category_leaf"], r["brand"]) if x], lv.get(int(r["parent_id"])))
                         for _, r in ok.iterrows()]}
 
 
@@ -414,7 +450,7 @@ async def suggest_accessories(screen_inch=None, gaming=False, **_):
         for _, r in df.iterrows():
             info = lv.get(int(r["parent_id"])) or {}
             if info.get("in_stock") is True:   # فقط موجودها؛ ناموجود را پیشنهاد نمی‌دهیم
-                c = _card(r["parent_name"], int(r["parent_id"]), [label], info)
+                c = _acc_card(r["parent_name"], int(r["parent_id"]), [label], info)
                 c["slot"] = label
                 cards.append(c)
                 break

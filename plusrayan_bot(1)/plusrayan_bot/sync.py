@@ -186,7 +186,6 @@ async def run_sync(transport=None):
         finally:
             state["running"] = False
 
-
 async def loop(hours: float):
     await asyncio.sleep(20)  # بعد از بالا آمدن سرور
     while True:
